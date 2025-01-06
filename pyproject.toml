@@ -8,10 +8,10 @@ packages = [{include = "upscaler_train"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
-torch = "^2.5.1"
-torchvision = "^0.20.1"
 pillow = "^11.0.0"
-
+torch = "1.13.1"  # We'll use the default PyTorch version
+torchvision = "0.14.1"  # We'll let PyTorch handle the compatible torchvision version
+torchaudio = "0.13.1"  # Similarly, let PyTorch handle this
 
 [build-system]
 requires = ["poetry-core"]
