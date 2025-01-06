@@ -2,10 +2,10 @@ import random
 import datetime
 import os
 import time
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import matplotlib.pyplot as plt
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
@@ -14,9 +14,9 @@ from torchvision import transforms
 # 1. Define the Dataset Class
 class SRDataset(Dataset):
     def __init__(self, dataset_name, transform=None):
-        datatset_dir = os.path.join(os.getcwd(), 'datasets',dataset_name)
-        self.lr_dir = os.path.join(datatset_dir, "LR")
-        self.hr_dir = os.path.join(datatset_dir, "HR")
+        datatset_dir = os.path.join(os.getcwd(), "datasets", dataset_name)
+        self.lr_dir = os.path.join(datatset_dir, "lr")
+        self.hr_dir = os.path.join(datatset_dir, "hr")
         self.lr_images = os.listdir(self.lr_dir)
         hr_images = os.listdir(self.hr_dir)
         self.transform = transform
@@ -34,22 +34,18 @@ class SRDataset(Dataset):
         return len(self.lr_images)
 
     def __getitem__(self, idx):
-        try:
-            this_image_name = self.lr_images[idx]
-            lr_image_path = os.path.join(self.lr_dir, this_image_name)
-            hr_image_path = os.path.join(self.hr_dir, this_image_name)
+        this_image_name = self.lr_images[idx]
+        lr_image_path = os.path.join(self.lr_dir, this_image_name)
+        hr_image_path = os.path.join(self.hr_dir, this_image_name)
 
-            lr_image = Image.open(lr_image_path).convert("RGB")
-            hr_image = Image.open(hr_image_path).convert("RGB")
+        lr_image = Image.open(lr_image_path).convert("RGB")
+        hr_image = Image.open(hr_image_path).convert("RGB")
 
-            if self.transform:
-                lr_image = self.transform(lr_image)
-                hr_image = self.transform(hr_image)
+        if self.transform:
+            lr_image = self.transform(lr_image)
+            hr_image = self.transform(hr_image)
 
-            return lr_image, hr_image
-        except Exception as e:
-            print("Error loading image:", e)
-            return self.__getitem__(random.randing(0, len(self.lr_images)))
+        return lr_image, hr_image
 
 
 # 2. Define the Model (SRCNN or a simple CNN)
@@ -69,12 +65,14 @@ class SuperResModel(nn.Module):
         return x
 
 
-# 3. Training Loop with Increased Verbosity
-def train(model, dataloaders, num_epochs=10, lr=0.001):
+# 3. Training Loop with Increased Verbosity and Tracking Losses for Plotting
+def train(model, dataloaders, num_epochs=10, lr=0.001, save_dir=None):
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     total_batches = len(dataloaders)
+    all_batch_losses = []
+    epoch_losses = []
 
     for epoch in range(num_epochs):
         model.train()
@@ -105,6 +103,9 @@ def train(model, dataloaders, num_epochs=10, lr=0.001):
 
             running_loss += loss.item()
 
+            # Save batch loss for graphing
+            all_batch_losses.append(loss.item())
+
             # Print feedback every 10 batches
             if (batch_idx + 1) % 10 == 0:
                 avg_loss = running_loss / (batch_idx + 1)
@@ -112,13 +113,54 @@ def train(model, dataloaders, num_epochs=10, lr=0.001):
                     f"    \nBatch {batch_idx+1}/{total_batches} - Loss: {avg_loss:.4f} | Time: {time.time() - start_batch_time:.2f} seconds"
                 )
 
+        # Save epoch loss for graphing
+        avg_epoch_loss = running_loss / total_batches
+        epoch_losses.append(avg_epoch_loss)
+
         avg_loss = running_loss / total_batches
         print(
             f"\nEpoch [{epoch+1}/{num_epochs}] completed. Average loss: {avg_loss:.4f} | Time: {time.time() - start_epoch_time:.2f} seconds\n"
         )
 
+    if save_dir:
+        plot_losses(all_batch_losses, epoch_losses, save_dir, dataset_name)
 
-# 4. Export Model to ONNX with Verbosity
+    return all_batch_losses, epoch_losses
+
+# 4. Plot the Loss Curves and Save as an Image
+def plot_losses(batch_losses, epoch_losses, save_dir, dataset_name):
+    # Create a figure to hold two subplots
+    fig, ax = plt.subplots(1, 2, figsize=(12, 6))
+
+    # Plot batch loss
+    ax[0].plot(batch_losses, label="Batch Loss", color="b")
+    ax[0].set_title(f"Loss Per Batch - {dataset_name}")  # Include dataset name
+    ax[0].set_xlabel("Batch Number")
+    ax[0].set_ylabel("Loss")
+    ax[0].grid(True)
+
+    # Plot epoch loss
+    ax[1].plot(epoch_losses, label="Epoch Loss", color="r")
+    ax[1].set_title(f"Loss Per Epoch - {dataset_name}")  # Include dataset name
+    ax[1].set_xlabel("Epoch Number")
+    ax[1].set_ylabel("Loss")
+    ax[1].grid(True)
+
+    # Add text annotations for details
+    ax[0].text(0.95, 0.95, f"Total Batches: {len(batch_losses)}", transform=ax[0].transAxes, ha="right", va="top")
+    ax[1].text(0.95, 0.95, f"Total Epochs: {len(epoch_losses)}", transform=ax[1].transAxes, ha="right", va="top")
+
+    # Saving the figure
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    plot_filename = os.path.join(save_dir, f"training_loss_{dataset_name}_{timestamp}.png")  # Save filename with dataset name
+    plt.tight_layout()
+    plt.savefig(plot_filename)
+    plt.close()
+
+    print(f"Loss plots saved to {plot_filename}")
+
+
+# 5. Export Model to ONNX with Verbosity
 def export_to_onnx(unique_model_name, model, dummy_input):
     onnx_filename = f"{unique_model_name}.onnx"
     print(f"Exporting model to ONNX format... ({onnx_filename})")
@@ -138,9 +180,7 @@ def run_train_script(dataset_name, epochs, image_height, image_width, batch_size
 
     # Create dataset and dataloader
     dataset = SRDataset(dataset_name, transform=transform)
-    dataloader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=True
-    )
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     # Initialize model
     model = SuperResModel()
@@ -151,8 +191,14 @@ def run_train_script(dataset_name, epochs, image_height, image_width, batch_size
     else:
         print("CUDA is not available. Using CPU.")
 
+    # Directory for saving plots
+    save_dir = os.path.join(os.getcwd(), "training_logs")
+    os.makedirs(save_dir, exist_ok=True)
+
     # Train model
-    train(model, dataloader, num_epochs=epochs, lr=0.001)
+    all_batch_losses, epoch_losses = train(
+        model, dataloader, num_epochs=epochs, lr=0.001, save_dir=save_dir
+    )
 
     # Export model to ONNX
     dummy_input = (
@@ -165,16 +211,18 @@ def run_train_script(dataset_name, epochs, image_height, image_width, batch_size
 
     train_finish_time = time.time()
     train_time_taken_readable = str(
-        datetime.timedelta(seconds=train_finish_time - train_start_time)
+        datetime.timedelta(seconds=int(train_finish_time - train_start_time))
     )
     print(
-        f"\n\Trained {epochs} epochs\non {dataset.get_dataset_size()} images\nof size {image_width}x{image_height}\nin {train_time_taken_readable}."
+        f"\nTrained {epochs} epochs\non {dataset.get_dataset_size()} images\nof size {image_width}x{image_height}\nin {train_time_taken_readable}."
     )
 
 
-# 5. Main function to execute the training and export
+# 6. Main function to execute the training and export
 if __name__ == "__main__":
-    for epochs in [1,5, 10, 15, 20]:
-        dataset_name = "downscale3_01_05"
-        image_height, image_width = 640,640
-        run_train_script(dataset_name, epochs, image_height, image_width)
+    epochs_to_use = [1, 5,10,15,20,25,30,35,40]
+    print(f'Training for these epochs: {epochs_to_use}')
+    for epochs in epochs_to_use:
+        dataset_name = "cat_downscale_4th_500_count"
+        image_height, image_width = 2560, 2560
+        run_train_script(dataset_name, epochs, image_height, image_width,batch_size=1)
